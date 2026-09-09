@@ -12,6 +12,14 @@ from app.worker import process_image_job
 
 settings = get_settings()
 
+# Replicate/Flux Kontext calls can legitimately take 30-90s+, plus our own
+# retry loop (MAX_RETRIES attempts, each waiting up to RESTYLE_POLL_TIMEOUT_SECONDS)
+# means worst case is several minutes. RQ's default job_timeout is 180s (3 min),
+# which was killing restyle jobs mid-flight and leaving them stuck at
+# PROCESSING (see worker.py's broad exception handling for the other half of
+# this fix). Give restyle jobs a longer budget explicitly.
+RESTYLE_JOB_TIMEOUT_SECONDS = 600  # 10 minutes
+
 
 class RegenLimitExceeded(Exception):
     pass
@@ -46,6 +54,7 @@ def create_draft_batch(db: Session, req: CreateDraftBatchRequest) -> list[ImageJ
 
     return jobs
 
+
 def create_restyle_job(
     db: Session,
     *,
@@ -55,6 +64,7 @@ def create_restyle_job(
     photo_bytes: bytes,
     photo_filename: str,
 ) -> ImageJob:
+    """Merchant uploaded their own photo — restyle it via Flux Kontext Pro (Replicate)."""
     storage = get_storage(settings)
     batch_id = str(uuid.uuid4())
 
@@ -79,8 +89,9 @@ def create_restyle_job(
     db.commit()
     db.refresh(job)
 
-    image_queue.enqueue(process_image_job, job.id)
+    image_queue.enqueue(process_image_job, job.id, job_timeout=RESTYLE_JOB_TIMEOUT_SECONDS)
     return job
+
 
 def select_draft(db: Session, draft_job_id: int) -> ImageJob:
     """Merchant picked a draft — render the same prompt on the flagship model."""

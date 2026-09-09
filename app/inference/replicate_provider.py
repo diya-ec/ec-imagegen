@@ -33,13 +33,16 @@ class ReplicateRestyleProvider(InferenceProvider):
         if input_image is None:
             raise InferenceError("ReplicateRestyleProvider requires input_image", retryable=False)
 
-        # replicate's SDK is sync — run it in a thread so the async worker path
-        # (asyncio.run in worker.py) doesn't block the event loop unnecessarily.
         return await asyncio.to_thread(self._generate_sync, prompt, model, input_image)
 
     def _generate_sync(self, prompt: str, model: str, input_image: bytes) -> GeneratedImage:
         settings = self._settings
         last_err: Exception | None = None
+
+        logger.info(
+            "Replicate restyle starting: model=%s, prompt_len=%d, image_size_bytes=%d",
+            model, len(prompt), len(input_image),
+        )
 
         for attempt in range(1, settings.MAX_RETRIES + 1):
             try:
@@ -51,6 +54,7 @@ class ReplicateRestyleProvider(InferenceProvider):
                         "output_format": "jpg",
                     },
                 )
+                logger.info("Replicate prediction created: id=%s, status=%s", prediction.id, prediction.status)
 
                 poll_start = time.time()
                 while prediction.status not in ("succeeded", "failed", "canceled"):
@@ -64,7 +68,21 @@ class ReplicateRestyleProvider(InferenceProvider):
                     prediction.reload()
 
                 if prediction.status == "failed":
-                    raise InferenceError(f"Replicate prediction failed: {prediction.error}", retryable=True)
+                    # DIAGNOSTIC: log everything we can see about this prediction,
+                    # since prediction.error is sometimes empty/unhelpful.
+                    logger.error(
+                        "Replicate prediction FAILED. id=%s error=%r logs=%r input=%r",
+                        prediction.id,
+                        prediction.error,
+                        getattr(prediction, "logs", None),
+                        {k: (v if k != "input_image" else "<bytes omitted>")
+                         for k, v in (prediction.input or {}).items()},
+                    )
+                    raise InferenceError(
+                        f"Replicate prediction failed: {prediction.error or '(no error message returned)'} "
+                        f"[id={prediction.id}, check https://replicate.com/p/{prediction.id}]",
+                        retryable=True,
+                    )
                 if prediction.status == "canceled":
                     raise InferenceError("Replicate prediction was canceled", retryable=True)
 
@@ -86,6 +104,7 @@ class ReplicateRestyleProvider(InferenceProvider):
                     raise
             except Exception as e:
                 last_err = e
+                logger.exception("Unexpected exception calling Replicate (attempt %s)", attempt)
                 if attempt == settings.MAX_RETRIES:
                     raise InferenceError(f"Replicate call failed after retries: {e}", retryable=True) from e
 
@@ -98,10 +117,10 @@ class ReplicateRestyleProvider(InferenceProvider):
 
     @staticmethod
     def _download(url: str) -> bytes:
-        from urllib.request import urlopen
-
-        with urlopen(url, timeout=60) as resp:
-            return resp.read()
+        import requests
+        resp = requests.get(url, timeout=60)
+        resp.raise_for_status()
+        return resp.content
 
 
 def get_restyle_provider(settings: Settings) -> InferenceProvider:
