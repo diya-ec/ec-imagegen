@@ -13,7 +13,11 @@ class WizardAnswers(BaseModel):
     lighting: str | None = None               # e.g. "natural daylight", "moody restaurant lighting"
     mood: str | None = None                   # e.g. "vibrant and appetizing", "elegant fine-dining"
 
-
+class CreateRestyleJobRequest(BaseModel):
+    restaurant_id: str
+    menu_item_id: str
+    extra_styling: str | None = None
+    # the photo itself arrives as multipart UploadFile in the router, not here
 class CreateDraftBatchRequest(BaseModel):
     restaurant_id: str
     menu_item_id: str

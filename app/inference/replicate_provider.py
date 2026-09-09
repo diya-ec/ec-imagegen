@@ -98,10 +98,10 @@ class ReplicateRestyleProvider(InferenceProvider):
 
     @staticmethod
     def _download(url: str) -> bytes:
-        import requests
-        resp = requests.get(url, timeout=60)
-        resp.raise_for_status()
-        return resp.content
+        from urllib.request import urlopen
+
+        with urlopen(url, timeout=60) as resp:
+            return resp.read()
 
 
 def get_restyle_provider(settings: Settings) -> InferenceProvider:
