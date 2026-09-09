@@ -6,7 +6,8 @@ from app.core.config import get_settings
 from app.db.models import ImageJob, JobStage, JobStatus
 from app.queue import image_queue
 from app.schemas import CreateDraftBatchRequest
-from app.services.prompt_builder import build_prompt
+from app.services.prompt_builder import build_prompt, build_restyle_prompt
+from app.services.storage import get_storage
 from app.worker import process_image_job
 
 settings = get_settings()
@@ -45,6 +46,41 @@ def create_draft_batch(db: Session, req: CreateDraftBatchRequest) -> list[ImageJ
 
     return jobs
 
+def create_restyle_job(
+    db: Session,
+    *,
+    restaurant_id: str | None,
+    menu_item_id: str | None,
+    extra_styling: str | None,
+    photo_bytes: bytes,
+    photo_filename: str,
+) -> ImageJob:
+    storage = get_storage(settings)
+    batch_id = str(uuid.uuid4())
+
+    rid = restaurant_id or "unknown"
+    mid = menu_item_id or "unknown"
+
+    source_key = f"{rid}/{mid}/{batch_id}/source_{photo_filename}"
+    source_path = storage.save(key=source_key, content=photo_bytes)
+
+    prompt = build_restyle_prompt(extra_styling)
+
+    job = ImageJob(
+        batch_id=batch_id,
+        restaurant_id=rid,
+        menu_item_id=mid,
+        stage=JobStage.RESTYLE,
+        status=JobStatus.PENDING,
+        prompt=prompt,
+        source_image_path=source_path,
+    )
+    db.add(job)
+    db.commit()
+    db.refresh(job)
+
+    image_queue.enqueue(process_image_job, job.id)
+    return job
 
 def select_draft(db: Session, draft_job_id: int) -> ImageJob:
     """Merchant picked a draft — render the same prompt on the flagship model."""

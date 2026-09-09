@@ -19,6 +19,7 @@ def _now() -> datetime:
 class JobStage(str, enum.Enum):
     DRAFT = "draft"
     FINAL = "final"
+    RESTYLE = "restyle" 
 
 
 class JobStatus(str, enum.Enum):
@@ -52,9 +53,10 @@ class ImageJob(Base):
     prompt: Mapped[str] = mapped_column(Text)
     model_used: Mapped[str | None] = mapped_column(String(128), nullable=True)
 
-    # Only meaningful for FINAL jobs — how many flagship regens this batch has used.
-    regen_count: Mapped[int] = mapped_column(Integer, default=0)
+    # Only meaningful for RESTYLE jobs — path to the merchant's original upload.
+    source_image_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
 
+    regen_count: Mapped[int] = mapped_column(Integer, default=0)
     image_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
     cost_usd: Mapped[float | None] = mapped_column(Float, nullable=True)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)

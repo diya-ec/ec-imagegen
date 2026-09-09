@@ -16,6 +16,11 @@ class Settings(BaseSettings):
     DEEPINFRA_API_KEY: str = ""
     DEEPINFRA_BASE_URL: str = "https://api.deepinfra.com/v1/openai"
 
+    REPLICATE_API_TOKEN: str = ""
+    RESTYLE_MODEL: str = "black-forest-labs/flux-kontext-pro"
+    RESTYLE_PRICE_PER_IMAGE_USD: float = 0.04  # check Replicate's actual per-run price
+    RESTYLE_POLL_TIMEOUT_SECONDS: int = 180
+
     # Model identifiers used for draft (cheap/fast) vs final (flagship) renders.
     DRAFT_MODEL: str = "black-forest-labs/FLUX-2-klein"
     FINAL_MODEL: str = "black-forest-labs/FLUX-2-max"

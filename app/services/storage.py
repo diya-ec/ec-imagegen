@@ -7,7 +7,11 @@ from app.core.config import Settings
 class StorageBackend(ABC):
     @abstractmethod
     def save(self, *, key: str, content: bytes) -> str:
-        """Persist bytes under `key`, return a path/URL usable to retrieve it later."""
+        raise NotImplementedError
+
+    @abstractmethod
+    def read(self, path: str) -> bytes:
+        """Read back bytes previously saved at `path` (as returned by save())."""
         raise NotImplementedError
 
 
@@ -22,14 +26,19 @@ class LocalStorage(StorageBackend):
         path.write_bytes(content)
         return str(path)
 
+    def read(self, path: str) -> bytes:
+        return Path(path).read_bytes()
+
 
 class S3Storage(StorageBackend):
-    """Placeholder — wire up boto3 here when moving off local disk."""
     def __init__(self, bucket: str, region: str):
         self._bucket = bucket
         self._region = region
 
     def save(self, *, key: str, content: bytes) -> str:
+        raise NotImplementedError("S3Storage not wired up yet — set STORAGE_BACKEND=local for now.")
+
+    def read(self, path: str) -> bytes:
         raise NotImplementedError("S3Storage not wired up yet — set STORAGE_BACKEND=local for now.")
 
 

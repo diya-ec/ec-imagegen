@@ -22,8 +22,19 @@ class GeneratedImage:
 
 class InferenceProvider(ABC):
     @abstractmethod
-    async def generate(self, *, prompt: str, model: str, size: str) -> GeneratedImage:
-        """Generate a single text-to-image result. Raises InferenceError on failure."""
+    async def generate(
+        self,
+        *,
+        prompt: str,
+        model: str,
+        size: str,
+        input_image: bytes | None = None,
+    ) -> GeneratedImage:
+        """
+        Generate a single image. When input_image is provided, this is an
+        image-to-image restyle call (e.g. Replicate/Flux Kontext); providers
+        that don't support it (DeepInfra) should raise if it's passed.
+        """
         raise NotImplementedError
 
 

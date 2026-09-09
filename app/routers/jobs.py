@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
 from app.db.database import get_db
@@ -20,6 +20,23 @@ def create_draft_batch(req: CreateDraftBatchRequest, db: Session = Depends(get_d
     jobs = job_service.create_draft_batch(db, req)
     return DraftBatchOut(batch_id=jobs[0].batch_id, jobs=jobs)
 
+@router.post("/restyle", response_model=JobOut, status_code=201)
+async def create_restyle_job(
+    photo: UploadFile = File(...),                      # required
+    restaurant_id: str | None = Form(None),              # now optional
+    menu_item_id: str | None = Form(None),                # now optional
+    extra_styling: str | None = Form(None),               # already optional
+    db: Session = Depends(get_db),
+):
+    photo_bytes = await photo.read()
+    return job_service.create_restyle_job(
+        db,
+        restaurant_id=restaurant_id,
+        menu_item_id=menu_item_id,
+        extra_styling=extra_styling,
+        photo_bytes=photo_bytes,
+        photo_filename=photo.filename or "upload.jpg",
+    )
 
 @router.get("/{job_id}", response_model=JobOut)
 def get_job(job_id: int, db: Session = Depends(get_db)):

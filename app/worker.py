@@ -6,6 +6,7 @@ from app.db.database import SessionLocal
 from app.db.models import ImageJob, JobStage, JobStatus
 from app.inference.base import InferenceError
 from app.inference.deepinfra import get_provider
+from app.inference.replicate_provider import get_restyle_provider
 from app.services.storage import get_storage
 
 logger = logging.getLogger(__name__)
@@ -13,12 +14,6 @@ settings = get_settings()
 
 
 def process_image_job(job_id: int) -> None:
-    """
-    Entry point enqueued via RQ. Kept synchronous (RQ's default) and runs the
-    actual async HTTP call via asyncio.run — simplest thing that works for a
-    single-process local worker; swap for an async worker loop later if
-    throughput needs it.
-    """
     db = SessionLocal()
     try:
         job = db.get(ImageJob, job_id)
@@ -29,14 +24,27 @@ def process_image_job(job_id: int) -> None:
         job.status = JobStatus.PROCESSING
         db.commit()
 
-        model = settings.DRAFT_MODEL if job.stage == JobStage.DRAFT else settings.FINAL_MODEL
-        provider = get_provider(settings)
         storage = get_storage(settings)
 
         try:
-            result = asyncio.run(
-                provider.generate(prompt=job.prompt, model=model, size=settings.IMAGE_SIZE)
-            )
+            if job.stage == JobStage.RESTYLE:
+                provider = get_restyle_provider(settings)
+                model = settings.RESTYLE_MODEL
+                source_bytes = storage.read(job.source_image_path)
+                result = asyncio.run(
+                    provider.generate(
+                        prompt=job.prompt,
+                        model=model,
+                        size=settings.IMAGE_SIZE,
+                        input_image=source_bytes,
+                    )
+                )
+            else:
+                model = settings.DRAFT_MODEL if job.stage == JobStage.DRAFT else settings.FINAL_MODEL
+                provider = get_provider(settings)
+                result = asyncio.run(
+                    provider.generate(prompt=job.prompt, model=model, size=settings.IMAGE_SIZE)
+                )
         except InferenceError as e:
             job.status = JobStatus.FAILED
             job.error_message = str(e)
