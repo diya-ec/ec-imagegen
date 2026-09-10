@@ -1,6 +1,7 @@
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile
 from sqlalchemy.orm import Session
 
+from app.core.config import get_settings
 from app.db.database import get_db
 from app.db.models import ImageJob
 from app.schemas import (
@@ -16,6 +17,7 @@ from app.services import job_service
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
+settings = get_settings()
 
 @router.post("/drafts", response_model=DraftBatchOut, status_code=201)
 def create_draft_batch(req: CreateDraftBatchRequest, db: Session = Depends(get_db)):
@@ -25,13 +27,30 @@ def create_draft_batch(req: CreateDraftBatchRequest, db: Session = Depends(get_d
 
 @router.post("/restyle", response_model=RestyleBatchOut, status_code=201)
 async def create_restyle_batch(
-    photo: UploadFile = File(...),                      # required
-    restaurant_id: str | None = Form(None),              # optional
-    menu_item_id: str | None = Form(None),                # optional
-    extra_styling: str | None = Form(None),               # optional
+    photo: UploadFile = File(...),
+    restaurant_id: str | None = Form(None),
+    menu_item_id: str | None = Form(None),
+    extra_styling: str | None = Form(None),
     db: Session = Depends(get_db),
 ):
-    photo_bytes = await photo.read()
+    if photo.content_type not in settings.ALLOWED_UPLOAD_CONTENT_TYPES:
+        raise HTTPException(
+            status_code=415,
+            detail=f"Unsupported file type '{photo.content_type}'. "
+                   f"Allowed: {', '.join(sorted(settings.ALLOWED_UPLOAD_CONTENT_TYPES))}",
+        )
+
+    # Read up to the limit + 1 byte so we can detect "too big" without
+    # loading an arbitrarily huge file into memory first.
+    photo_bytes = await photo.read(settings.MAX_UPLOAD_SIZE_BYTES + 1)
+    if len(photo_bytes) > settings.MAX_UPLOAD_SIZE_BYTES:
+        raise HTTPException(
+            status_code=413,
+            detail=f"File too large. Max {settings.MAX_UPLOAD_SIZE_BYTES // (1024*1024)} MB.",
+        )
+    if len(photo_bytes) == 0:
+        raise HTTPException(status_code=400, detail="Uploaded file is empty.")
+
     jobs = job_service.create_restyle_batch(
         db,
         restaurant_id=restaurant_id,

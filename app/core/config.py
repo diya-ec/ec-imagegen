@@ -20,6 +20,8 @@ class Settings(BaseSettings):
     RESTYLE_MODEL: str = "black-forest-labs/flux-kontext-pro"
     RESTYLE_PRICE_PER_IMAGE_USD: float = 0.04  # check Replicate's actual per-run price
     RESTYLE_POLL_TIMEOUT_SECONDS: int = 180
+    MAX_UPLOAD_SIZE_BYTES: int = 10 * 1024 * 1024  # 10 MB
+    ALLOWED_UPLOAD_CONTENT_TYPES: set[str] = {"image/jpeg", "image/png", "image/webp", "image/heic", "image/jpg"}
 
     # How many restyle variations to generate per upload, so the merchant can
     # pick a favorite. Mirrors MAX_DRAFT_VARIATIONS below, but for the

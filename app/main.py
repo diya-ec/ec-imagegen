@@ -1,16 +1,18 @@
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 
 from app.db.database import init_db
 from app.routers import jobs
 
-app = FastAPI(title="ec-imagegen", version="0.1.0")
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    init_db()
+    yield
+    # (no shutdown work needed today; add cleanup here if that changes)
+
+app = FastAPI(title="ec-imagegen", version="0.1.0", lifespan=lifespan)
 
 app.include_router(jobs.router)
-
-
-@app.on_event("startup")
-def on_startup():
-    init_db()
 
 
 @app.get("/health")

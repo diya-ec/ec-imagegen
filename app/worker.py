@@ -1,5 +1,6 @@
 import asyncio
 import logging
+import time
 
 from app.core.config import get_settings
 from app.db.database import SessionLocal
@@ -11,6 +12,13 @@ from app.services.storage import get_storage
 
 logger = logging.getLogger(__name__)
 settings = get_settings()
+
+
+def _batch_status_counts(db, batch_id: str) -> tuple[int, int, int]:
+    jobs = db.query(ImageJob).filter(ImageJob.batch_id == batch_id).all()
+    completed = sum(job.status == JobStatus.COMPLETED for job in jobs)
+    failed = sum(job.status == JobStatus.FAILED for job in jobs)
+    return len(jobs), completed, failed
 
 
 def process_image_job(job_id: int) -> None:
@@ -31,6 +39,7 @@ def process_image_job(job_id: int) -> None:
     specifically to prevent that stuck state.
     """
     db = SessionLocal()
+    started_at = time.perf_counter()
     try:
         job = db.get(ImageJob, job_id)
         if job is None:
@@ -40,7 +49,16 @@ def process_image_job(job_id: int) -> None:
         job.status = JobStatus.PROCESSING
         db.commit()
 
+        logger.info(
+            "image_generation_started job_id=%s batch_id=%s stage=%s status=%s",
+            job.id,
+            job.batch_id,
+            job.stage.value,
+            job.status.value,
+        )
+
         storage = get_storage(settings)
+        provider_started_at = time.perf_counter()
 
         try:
             if job.stage == JobStage.RESTYLE:
@@ -70,7 +88,24 @@ def process_image_job(job_id: int) -> None:
             job.status = JobStatus.FAILED
             job.error_message = str(e)
             db.commit()
-            logger.error("Image generation failed for job %s: %s", job_id, e)
+            total_seconds = time.perf_counter() - started_at
+            provider_seconds = time.perf_counter() - provider_started_at
+            batch_total, batch_completed, batch_failed = _batch_status_counts(db, job.batch_id)
+            logger.error(
+                "image_generation_finished job_id=%s batch_id=%s stage=%s status=failed "
+                "error_type=%s provider_seconds=%.3f total_seconds=%.3f "
+                "batch_completed=%s batch_failed=%s batch_total=%s error=%s",
+                job.id,
+                job.batch_id,
+                job.stage.value,
+                type(e).__name__,
+                provider_seconds,
+                total_seconds,
+                batch_completed,
+                batch_failed,
+                batch_total,
+                e,
+            )
             return
 
         except Exception as e:
@@ -82,17 +117,55 @@ def process_image_job(job_id: int) -> None:
             job.status = JobStatus.FAILED
             job.error_message = f"Unexpected error: {e}"
             db.commit()
-            logger.exception("Unexpected failure processing job %s", job_id)
+            total_seconds = time.perf_counter() - started_at
+            provider_seconds = time.perf_counter() - provider_started_at
+            batch_total, batch_completed, batch_failed = _batch_status_counts(db, job.batch_id)
+            logger.exception(
+                "image_generation_finished job_id=%s batch_id=%s stage=%s status=failed "
+                "error_type=%s provider_seconds=%.3f total_seconds=%.3f "
+                "batch_completed=%s batch_failed=%s batch_total=%s",
+                job.id,
+                job.batch_id,
+                job.stage.value,
+                type(e).__name__,
+                provider_seconds,
+                total_seconds,
+                batch_completed,
+                batch_failed,
+                batch_total,
+            )
             return
 
+        provider_seconds = time.perf_counter() - provider_started_at
+        storage_started_at = time.perf_counter()
         key = f"{job.restaurant_id}/{job.menu_item_id}/{job.batch_id}/{job.stage.value}_{job.id}.png"
         path = storage.save(key=key, content=result.content)
+        storage_seconds = time.perf_counter() - storage_started_at
 
         job.status = JobStatus.COMPLETED
         job.image_path = path
         job.model_used = result.model
         job.cost_usd = result.cost_usd
         db.commit()
+
+        total_seconds = time.perf_counter() - started_at
+        batch_total, batch_completed, batch_failed = _batch_status_counts(db, job.batch_id)
+        logger.info(
+            "image_generation_finished job_id=%s batch_id=%s stage=%s status=completed "
+            "provider=%s model=%s provider_seconds=%.3f storage_seconds=%.3f "
+            "total_seconds=%.3f batch_completed=%s batch_failed=%s batch_total=%s",
+            job.id,
+            job.batch_id,
+            job.stage.value,
+            result.provider,
+            result.model,
+            provider_seconds,
+            storage_seconds,
+            total_seconds,
+            batch_completed,
+            batch_failed,
+            batch_total,
+        )
 
     except Exception as e:
         # Last-resort safety net: if something fails even before/around the
@@ -105,6 +178,21 @@ def process_image_job(job_id: int) -> None:
                 job.status = JobStatus.FAILED
                 job.error_message = f"Fatal worker error: {e}"
                 db.commit()
+                batch_total, batch_completed, batch_failed = _batch_status_counts(db, job.batch_id)
+                logger.error(
+                    "image_generation_finished job_id=%s batch_id=%s stage=%s status=failed "
+                    "error_type=%s total_seconds=%.3f batch_completed=%s batch_failed=%s "
+                    "batch_total=%s error=%s",
+                    job.id,
+                    job.batch_id,
+                    job.stage.value,
+                    type(e).__name__,
+                    time.perf_counter() - started_at,
+                    batch_completed,
+                    batch_failed,
+                    batch_total,
+                    e,
+                )
         except Exception:
             logger.exception("Could not even mark job %s as FAILED", job_id)
 
