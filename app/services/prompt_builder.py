@@ -29,6 +29,21 @@ _RESTYLE_BASE = (
     "identity of the subject."
 )
 
+# Rotated across a restyle batch (one per variation index, wrapping around if
+# MAX_RESTYLE_VARIATIONS ever exceeds len(this list)) so the N outputs are
+# deliberately distinct instead of relying on model randomness alone. Each
+# entry only nudges lighting/angle/mood — never subject, plate, or dish
+# identity, which the base prompt already locks down.
+RESTYLE_VARIATION_STYLES: list[str] = [
+    "Style: bright, airy natural daylight look, softly diffused, minimal "
+    "shadows, three-quarter angle.",
+    "Style: warm, moody restaurant lighting with gentle directional "
+    "shadows and a slightly elevated angle.",
+    "Style: crisp, high-contrast studio lighting on a clean, cool-toned "
+    "background, straight-on flattering angle.",
+]
+
+
 def build_prompt(answers: WizardAnswers) -> str:
     values = {"dish_name": answers.dish_name, **_DEFAULTS}
     for field, default in _DEFAULTS.items():
@@ -37,7 +52,20 @@ def build_prompt(answers: WizardAnswers) -> str:
             values[field] = provided
     return _BASE.format(**values)
 
-def build_restyle_prompt(extra_styling: str | None) -> str:
-    if not extra_styling:
-        return _RESTYLE_BASE
-    return f"{_RESTYLE_BASE} Additional styling: {extra_styling}."
+
+def build_restyle_prompt(extra_styling: str | None, variation_index: int = 0) -> str:
+    """
+    variation_index selects a rotating lighting/angle directive so a batch of
+    restyle jobs produces visibly distinct results. Pass no index (or 0) to
+    get the original single-variant behavior unchanged.
+    """
+    parts = [_RESTYLE_BASE]
+
+    if RESTYLE_VARIATION_STYLES:
+        style = RESTYLE_VARIATION_STYLES[variation_index % len(RESTYLE_VARIATION_STYLES)]
+        parts.append(style)
+
+    if extra_styling:
+        parts.append(f"Additional styling: {extra_styling}.")
+
+    return " ".join(parts)

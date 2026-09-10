@@ -21,6 +21,13 @@ class Settings(BaseSettings):
     RESTYLE_PRICE_PER_IMAGE_USD: float = 0.04  # check Replicate's actual per-run price
     RESTYLE_POLL_TIMEOUT_SECONDS: int = 180
 
+    # How many restyle variations to generate per upload, so the merchant can
+    # pick a favorite. Mirrors MAX_DRAFT_VARIATIONS below, but for the
+    # image-to-image path. Each variation is a separate ImageJob (same
+    # batch_id, same source_image_path) with a rotated style directive from
+    # prompt_builder.RESTYLE_VARIATION_STYLES.
+    MAX_RESTYLE_VARIATIONS: int = 3
+
     # Model identifiers used for draft (cheap/fast) vs final (flagship) renders.
     DRAFT_MODEL: str = "black-forest-labs/FLUX-2-klein"
     FINAL_MODEL: str = "black-forest-labs/FLUX-2-max"

@@ -2,7 +2,7 @@ import enum
 import uuid
 from datetime import datetime, timezone
 
-from sqlalchemy import DateTime, Enum, Float, ForeignKey, Integer, String, Text
+from sqlalchemy import Boolean, DateTime, Enum, Float, ForeignKey, Integer, String, Text
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
 from app.db.database import Base
@@ -38,6 +38,12 @@ class ImageJob(Base):
     picks one) a FINAL row. Regenerating the final creates a new FINAL row
     with the same batch_id and an incremented regen_count, rather than
     mutating the old one — keeps a full audit trail per item.
+
+    For RESTYLE, batch_id groups MAX_RESTYLE_VARIATIONS rows generated from
+    the same uploaded source photo — same pattern as the draft batch, just on
+    the image-to-image path. is_selected marks which variation the merchant
+    picked; unlike DRAFT->FINAL, picking a restyle variation does not trigger
+    a re-render, since restyle output is already full quality.
     """
     __tablename__ = "image_jobs"
 
@@ -55,6 +61,11 @@ class ImageJob(Base):
 
     # Only meaningful for RESTYLE jobs — path to the merchant's original upload.
     source_image_path: Mapped[str | None] = mapped_column(String(512), nullable=True)
+
+    # Only meaningful for RESTYLE jobs — which merchant picked as their
+    # preferred variation within the batch. At most one row per batch_id
+    # should have this set to True (enforced in job_service, not the DB).
+    is_selected: Mapped[bool] = mapped_column(Boolean, default=False)
 
     regen_count: Mapped[int] = mapped_column(Integer, default=0)
     image_path: Mapped[str | None] = mapped_column(String(512), nullable=True)

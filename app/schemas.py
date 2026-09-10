@@ -33,6 +33,8 @@ class JobOut(BaseModel):
     status: str
     model_used: str | None
     regen_count: int
+    source_image_path: str | None
+    is_selected: bool
     image_path: str | None
     cost_usd: float | None
     error_message: str | None
@@ -43,8 +45,17 @@ class DraftBatchOut(BaseModel):
     jobs: list[JobOut]
 
 
+class RestyleBatchOut(BaseModel):
+    batch_id: str
+    jobs: list[JobOut]
+
+
 class SelectDraftRequest(BaseModel):
     draft_job_id: int
+
+
+class SelectRestyleRequest(BaseModel):
+    job_id: int
 
 
 class RegenerateFinalRequest(BaseModel):

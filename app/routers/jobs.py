@@ -8,7 +8,9 @@ from app.schemas import (
     DraftBatchOut,
     JobOut,
     RegenerateFinalRequest,
+    RestyleBatchOut,
     SelectDraftRequest,
+    SelectRestyleRequest,
 )
 from app.services import job_service
 
@@ -20,16 +22,17 @@ def create_draft_batch(req: CreateDraftBatchRequest, db: Session = Depends(get_d
     jobs = job_service.create_draft_batch(db, req)
     return DraftBatchOut(batch_id=jobs[0].batch_id, jobs=jobs)
 
-@router.post("/restyle", response_model=JobOut, status_code=201)
-async def create_restyle_job(
+
+@router.post("/restyle", response_model=RestyleBatchOut, status_code=201)
+async def create_restyle_batch(
     photo: UploadFile = File(...),                      # required
-    restaurant_id: str | None = Form(None),              # now optional
-    menu_item_id: str | None = Form(None),                # now optional
-    extra_styling: str | None = Form(None),               # already optional
+    restaurant_id: str | None = Form(None),              # optional
+    menu_item_id: str | None = Form(None),                # optional
+    extra_styling: str | None = Form(None),               # optional
     db: Session = Depends(get_db),
 ):
     photo_bytes = await photo.read()
-    return job_service.create_restyle_job(
+    jobs = job_service.create_restyle_batch(
         db,
         restaurant_id=restaurant_id,
         menu_item_id=menu_item_id,
@@ -37,6 +40,16 @@ async def create_restyle_job(
         photo_bytes=photo_bytes,
         photo_filename=photo.filename or "upload.jpg",
     )
+    return RestyleBatchOut(batch_id=jobs[0].batch_id, jobs=jobs)
+
+
+@router.post("/restyle/select", response_model=JobOut, status_code=201)
+def select_restyle(req: SelectRestyleRequest, db: Session = Depends(get_db)):
+    try:
+        return job_service.select_restyle(db, req.job_id)
+    except job_service.RestyleJobNotFound as e:
+        raise HTTPException(status_code=404, detail=str(e))
+
 
 @router.get("/{job_id}", response_model=JobOut)
 def get_job(job_id: int, db: Session = Depends(get_db)):

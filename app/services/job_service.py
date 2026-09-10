@@ -29,6 +29,10 @@ class DraftNotFound(Exception):
     pass
 
 
+class RestyleJobNotFound(Exception):
+    pass
+
+
 def create_draft_batch(db: Session, req: CreateDraftBatchRequest) -> list[ImageJob]:
     """Kick off MAX_DRAFT_VARIATIONS cheap preview renders for one wizard submission."""
     prompt = build_prompt(req.wizard_answers)
@@ -55,7 +59,7 @@ def create_draft_batch(db: Session, req: CreateDraftBatchRequest) -> list[ImageJ
     return jobs
 
 
-def create_restyle_job(
+def create_restyle_batch(
     db: Session,
     *,
     restaurant_id: str | None,
@@ -63,8 +67,16 @@ def create_restyle_job(
     extra_styling: str | None,
     photo_bytes: bytes,
     photo_filename: str,
-) -> ImageJob:
-    """Merchant uploaded their own photo — restyle it via Flux Kontext Pro (Replicate)."""
+) -> list[ImageJob]:
+    """
+    Merchant uploaded their own photo — restyle it via Flux Kontext Pro
+    (Replicate) into MAX_RESTYLE_VARIATIONS distinct-looking options, mirroring
+    create_draft_batch's "generate a few, let them pick" pattern. The source
+    photo is uploaded and saved exactly once; every variation job in the batch
+    points at the same source_image_path and only differs in its prompt (via a
+    rotated style directive from prompt_builder) and, downstream, its
+    generation result.
+    """
     storage = get_storage(settings)
     batch_id = str(uuid.uuid4())
 
@@ -74,23 +86,50 @@ def create_restyle_job(
     source_key = f"{rid}/{mid}/{batch_id}/source_{photo_filename}"
     source_path = storage.save(key=source_key, content=photo_bytes)
 
-    prompt = build_restyle_prompt(extra_styling)
+    jobs: list[ImageJob] = []
+    for variation_index in range(settings.MAX_RESTYLE_VARIATIONS):
+        prompt = build_restyle_prompt(extra_styling, variation_index=variation_index)
+        job = ImageJob(
+            batch_id=batch_id,
+            restaurant_id=rid,
+            menu_item_id=mid,
+            stage=JobStage.RESTYLE,
+            status=JobStatus.PENDING,
+            prompt=prompt,
+            source_image_path=source_path,
+        )
+        db.add(job)
+        jobs.append(job)
 
-    job = ImageJob(
-        batch_id=batch_id,
-        restaurant_id=rid,
-        menu_item_id=mid,
-        stage=JobStage.RESTYLE,
-        status=JobStatus.PENDING,
-        prompt=prompt,
-        source_image_path=source_path,
-    )
-    db.add(job)
     db.commit()
-    db.refresh(job)
+    for job in jobs:
+        db.refresh(job)
+        image_queue.enqueue(process_image_job, job.id, job_timeout=RESTYLE_JOB_TIMEOUT_SECONDS)
 
-    image_queue.enqueue(process_image_job, job.id, job_timeout=RESTYLE_JOB_TIMEOUT_SECONDS)
-    return job
+    return jobs
+
+
+def select_restyle(db: Session, job_id: int) -> ImageJob:
+    """
+    Merchant picked their favorite variation from a restyle batch. Unlike
+    select_draft, this does not enqueue a new render — restyle output is
+    already full quality — it just records the preference and clears any
+    prior selection in the same batch.
+    """
+    chosen = db.get(ImageJob, job_id)
+    if chosen is None or chosen.stage != JobStage.RESTYLE:
+        raise RestyleJobNotFound(f"No restyle job with id {job_id}")
+
+    db.query(ImageJob).filter(
+        ImageJob.batch_id == chosen.batch_id,
+        ImageJob.stage == JobStage.RESTYLE,
+        ImageJob.is_selected.is_(True),
+    ).update({"is_selected": False})
+
+    chosen.is_selected = True
+    db.commit()
+    db.refresh(chosen)
+    return chosen
 
 
 def select_draft(db: Session, draft_job_id: int) -> ImageJob:
