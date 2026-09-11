@@ -17,7 +17,7 @@ class StorageBackend(ABC):
 
 class LocalStorage(StorageBackend):
     def __init__(self, base_dir: str):
-        self._base_dir = Path(base_dir)
+        self._base_dir = Path(base_dir).expanduser().resolve()
         self._base_dir.mkdir(parents=True, exist_ok=True)
 
     def save(self, *, key: str, content: bytes) -> str:
@@ -27,7 +27,20 @@ class LocalStorage(StorageBackend):
         return str(path)
 
     def read(self, path: str) -> bytes:
-        return Path(path).read_bytes()
+        source_path = Path(path)
+        if not source_path.is_absolute():
+            if source_path.parts and source_path.parts[0] == self._base_dir.name:
+                # Support paths persisted by older versions as `storage/...`.
+                source_path = self._base_dir.parent / source_path
+            else:
+                source_path = self._base_dir / source_path
+        source_path = source_path.resolve()
+        try:
+            return source_path.read_bytes()
+        except FileNotFoundError as exc:
+            raise FileNotFoundError(
+                f"Stored image not found: {source_path} (storage root: {self._base_dir})"
+            ) from exc
 
 
 class S3Storage(StorageBackend):

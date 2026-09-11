@@ -4,9 +4,8 @@ import time
 
 from app.core.config import get_settings
 from app.db.database import SessionLocal
-from app.db.models import ImageJob, JobStage, JobStatus
+from app.db.models import ImageJob, JobStatus
 from app.inference.base import InferenceError
-from app.inference.deepinfra import get_provider
 from app.inference.replicate_provider import get_restyle_provider
 from app.services.storage import get_storage
 
@@ -24,13 +23,11 @@ def _batch_status_counts(db, batch_id: str) -> tuple[int, int, int]:
 def process_image_job(job_id: int) -> None:
     """
     Entry point enqueued via RQ. Kept synchronous (RQ's default) and runs the
-    actual async HTTP call via asyncio.run — simplest thing that works for a
-    single-process local worker; swap for an async worker loop later if
-    throughput needs it.
+    actual async HTTP call via asyncio.run.
 
-    Branches on job.stage:
-      - DRAFT / FINAL -> DeepInfra (text-to-image)
-      - RESTYLE       -> Replicate / Flux Kontext (image-to-image)
+    Image-to-image restyle only: every job reads the merchant's uploaded
+    source photo from storage and sends it + a prompt to Replicate/Flux
+    Kontext.
 
     IMPORTANT: every failure path below must update the job's status in the
     DB. If an exception type isn't caught here, the job silently stays stuck
@@ -50,10 +47,9 @@ def process_image_job(job_id: int) -> None:
         db.commit()
 
         logger.info(
-            "image_generation_started job_id=%s batch_id=%s stage=%s status=%s",
+            "image_generation_started job_id=%s batch_id=%s status=%s",
             job.id,
             job.batch_id,
-            job.stage.value,
             job.status.value,
         )
 
@@ -61,28 +57,20 @@ def process_image_job(job_id: int) -> None:
         provider_started_at = time.perf_counter()
 
         try:
-            if job.stage == JobStage.RESTYLE:
-                provider = get_restyle_provider(settings)
-                model = settings.RESTYLE_MODEL
-                if not job.source_image_path:
-                    raise InferenceError(
-                        f"Restyle job {job_id} has no source_image_path", retryable=False
-                    )
-                source_bytes = storage.read(job.source_image_path)
-                result = asyncio.run(
-                    provider.generate(
-                        prompt=job.prompt,
-                        model=model,
-                        size=settings.IMAGE_SIZE,
-                        input_image=source_bytes,
-                    )
+            if not job.source_image_path:
+                raise InferenceError(
+                    f"Restyle job {job_id} has no source_image_path", retryable=False
                 )
-            else:
-                model = settings.DRAFT_MODEL if job.stage == JobStage.DRAFT else settings.FINAL_MODEL
-                provider = get_provider(settings)
-                result = asyncio.run(
-                    provider.generate(prompt=job.prompt, model=model, size=settings.IMAGE_SIZE)
+            source_bytes = storage.read(job.source_image_path)
+            provider = get_restyle_provider(settings)
+            result = asyncio.run(
+                provider.generate(
+                    prompt=job.prompt,
+                    model=settings.RESTYLE_MODEL,
+                    size=settings.IMAGE_SIZE,
+                    input_image=source_bytes,
                 )
+            )
 
         except InferenceError as e:
             job.status = JobStatus.FAILED
@@ -92,13 +80,13 @@ def process_image_job(job_id: int) -> None:
             provider_seconds = time.perf_counter() - provider_started_at
             batch_total, batch_completed, batch_failed = _batch_status_counts(db, job.batch_id)
             logger.error(
-                "image_generation_finished job_id=%s batch_id=%s stage=%s status=failed "
-                "error_type=%s provider_seconds=%.3f total_seconds=%.3f "
+                "image_generation_finished job_id=%s batch_id=%s status=failed "
+                "error_type=%s retryable=%s provider_seconds=%.3f total_seconds=%.3f "
                 "batch_completed=%s batch_failed=%s batch_total=%s error=%s",
                 job.id,
                 job.batch_id,
-                job.stage.value,
                 type(e).__name__,
+                e.retryable,
                 provider_seconds,
                 total_seconds,
                 batch_completed,
@@ -109,11 +97,10 @@ def process_image_job(job_id: int) -> None:
             return
 
         except Exception as e:
-            # Catches anything else: RQ's JobTimeoutException (thrown by
-            # TimerDeathPenalty on Windows, or the default death penalty on
-            # Linux), storage.read() failures, provider crashes we didn't
-            # anticipate, etc. Without this, the job would stay stuck at
-            # PROCESSING forever with no error recorded.
+            # Catches anything else: RQ's JobTimeoutException, storage.read()
+            # failures, provider crashes we didn't anticipate, etc. Without
+            # this, the job would stay stuck at PROCESSING forever with no
+            # error recorded.
             job.status = JobStatus.FAILED
             job.error_message = f"Unexpected error: {e}"
             db.commit()
@@ -121,12 +108,11 @@ def process_image_job(job_id: int) -> None:
             provider_seconds = time.perf_counter() - provider_started_at
             batch_total, batch_completed, batch_failed = _batch_status_counts(db, job.batch_id)
             logger.exception(
-                "image_generation_finished job_id=%s batch_id=%s stage=%s status=failed "
+                "image_generation_finished job_id=%s batch_id=%s status=failed "
                 "error_type=%s provider_seconds=%.3f total_seconds=%.3f "
                 "batch_completed=%s batch_failed=%s batch_total=%s",
                 job.id,
                 job.batch_id,
-                job.stage.value,
                 type(e).__name__,
                 provider_seconds,
                 total_seconds,
@@ -138,7 +124,7 @@ def process_image_job(job_id: int) -> None:
 
         provider_seconds = time.perf_counter() - provider_started_at
         storage_started_at = time.perf_counter()
-        key = f"{job.restaurant_id}/{job.menu_item_id}/{job.batch_id}/{job.stage.value}_{job.id}.png"
+        key = f"{job.restaurant_id}/{job.menu_item_id}/{job.batch_id}/restyle_{job.id}.jpg"
         path = storage.save(key=key, content=result.content)
         storage_seconds = time.perf_counter() - storage_started_at
 
@@ -151,12 +137,11 @@ def process_image_job(job_id: int) -> None:
         total_seconds = time.perf_counter() - started_at
         batch_total, batch_completed, batch_failed = _batch_status_counts(db, job.batch_id)
         logger.info(
-            "image_generation_finished job_id=%s batch_id=%s stage=%s status=completed "
+            "image_generation_finished job_id=%s batch_id=%s status=completed "
             "provider=%s model=%s provider_seconds=%.3f storage_seconds=%.3f "
             "total_seconds=%.3f batch_completed=%s batch_failed=%s batch_total=%s",
             job.id,
             job.batch_id,
-            job.stage.value,
             result.provider,
             result.model,
             provider_seconds,
@@ -180,12 +165,11 @@ def process_image_job(job_id: int) -> None:
                 db.commit()
                 batch_total, batch_completed, batch_failed = _batch_status_counts(db, job.batch_id)
                 logger.error(
-                    "image_generation_finished job_id=%s batch_id=%s stage=%s status=failed "
+                    "image_generation_finished job_id=%s batch_id=%s status=failed "
                     "error_type=%s total_seconds=%.3f batch_completed=%s batch_failed=%s "
                     "batch_total=%s error=%s",
                     job.id,
                     job.batch_id,
-                    job.stage.value,
                     type(e).__name__,
                     time.perf_counter() - started_at,
                     batch_completed,

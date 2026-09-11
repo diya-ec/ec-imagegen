@@ -1,8 +1,7 @@
 """
 Replicate implementation of InferenceProvider — image-to-image restyling
 via Flux Kontext Pro. Takes an uploaded merchant photo + prompt, returns
-a professionally restyled version. Mirrors the polling/retry pattern
-validated in the test script.
+a professionally restyled version.
 """
 import asyncio
 import io
@@ -28,11 +27,8 @@ class ReplicateRestyleProvider(InferenceProvider):
         prompt: str,
         model: str,
         size: str,
-        input_image: bytes | None = None,
+        input_image: bytes,
     ) -> GeneratedImage:
-        if input_image is None:
-            raise InferenceError("ReplicateRestyleProvider requires input_image", retryable=False)
-
         return await asyncio.to_thread(self._generate_sync, prompt, model, input_image)
 
     def _generate_sync(self, prompt: str, model: str, input_image: bytes) -> GeneratedImage:
@@ -68,8 +64,6 @@ class ReplicateRestyleProvider(InferenceProvider):
                     prediction.reload()
 
                 if prediction.status == "failed":
-                    # DIAGNOSTIC: log everything we can see about this prediction,
-                    # since prediction.error is sometimes empty/unhelpful.
                     logger.error(
                         "Replicate prediction FAILED. id=%s error=%r logs=%r input=%r",
                         prediction.id,
@@ -102,6 +96,31 @@ class ReplicateRestyleProvider(InferenceProvider):
                 last_err = e
                 if not e.retryable or attempt == settings.MAX_RETRIES:
                     raise
+
+            except replicate.exceptions.ReplicateError as e:
+                # Map Replicate's own error type to retryable/non-retryable by
+                # HTTP status, instead of falling through to the generic
+                # except-Exception branch below (which used to retry
+                # everything 3x — including permanent failures like "402
+                # insufficient credit", wasting retries and tripping rate
+                # limits).
+                status = getattr(e, "status", None) or getattr(e, "status_code", None)
+                if status == 402:
+                    raise InferenceError(
+                        f"Replicate account has insufficient credit: {e}. "
+                        f"Add credit at https://replicate.com/account/billing#billing",
+                        retryable=False,
+                    ) from e
+                if status == 429 or (status is not None and status >= 500):
+                    last_err = e
+                    logger.warning("Replicate transient error (attempt %s/%s, status=%s): %s",
+                                    attempt, settings.MAX_RETRIES, status, e)
+                    if attempt == settings.MAX_RETRIES:
+                        raise InferenceError(f"Replicate call failed after retries: {e}", retryable=True) from e
+                else:
+                    # Other 4xx (bad request, auth, bad model id) — not retryable.
+                    raise InferenceError(f"Replicate rejected request (status={status}): {e}", retryable=False) from e
+
             except Exception as e:
                 last_err = e
                 logger.exception("Unexpected exception calling Replicate (attempt %s)", attempt)

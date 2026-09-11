@@ -1,11 +1,11 @@
 """
 Inference provider interface.
 
-Every model call in this system — draft or final — goes through this
-interface. Today the only implementation is DeepInfra. When Donil's team
-finishes fine-tuning a self-hosted model, they add a new class here
-(e.g. SelfHostedProvider) and flip Settings.INFERENCE_PROVIDER — routers,
-services, and the worker never change.
+This service is image-to-image restyle only. Every generation call goes
+through this interface. Today the only implementation is Replicate (Flux
+Kontext Pro). If another image-to-image provider is added later (e.g. a
+self-hosted model), it implements this same interface and callers never
+change.
 """
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
@@ -14,7 +14,7 @@ from dataclasses import dataclass
 @dataclass
 class GeneratedImage:
     content: bytes
-    content_type: str  # e.g. "image/png"
+    content_type: str  # e.g. "image/jpeg"
     provider: str
     model: str
     cost_usd: float
@@ -28,13 +28,9 @@ class InferenceProvider(ABC):
         prompt: str,
         model: str,
         size: str,
-        input_image: bytes | None = None,
+        input_image: bytes,
     ) -> GeneratedImage:
-        """
-        Generate a single image. When input_image is provided, this is an
-        image-to-image restyle call (e.g. Replicate/Flux Kontext); providers
-        that don't support it (DeepInfra) should raise if it's passed.
-        """
+        """Generate one restyled image from a source image + prompt."""
         raise NotImplementedError
 
 

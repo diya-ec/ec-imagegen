@@ -4,33 +4,20 @@ from sqlalchemy.orm import Session
 from app.core.config import get_settings
 from app.db.database import get_db
 from app.db.models import ImageJob
-from app.schemas import (
-    CreateDraftBatchRequest,
-    DraftBatchOut,
-    JobOut,
-    RegenerateFinalRequest,
-    RestyleBatchOut,
-    SelectDraftRequest,
-    SelectRestyleRequest,
-)
+from app.schemas import JobOut, RestyleBatchOut, SelectRestyleRequest
 from app.services import job_service
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
 settings = get_settings()
 
-@router.post("/drafts", response_model=DraftBatchOut, status_code=201)
-def create_draft_batch(req: CreateDraftBatchRequest, db: Session = Depends(get_db)):
-    jobs = job_service.create_draft_batch(db, req)
-    return DraftBatchOut(batch_id=jobs[0].batch_id, jobs=jobs)
-
 
 @router.post("/restyle", response_model=RestyleBatchOut, status_code=201)
 async def create_restyle_batch(
-    photo: UploadFile = File(...),
-    restaurant_id: str | None = Form(None),
-    menu_item_id: str | None = Form(None),
-    extra_styling: str | None = Form(None),
+    photo: UploadFile = File(...),                      # required
+    restaurant_id: str | None = Form(None),              # optional
+    menu_item_id: str | None = Form(None),                # optional
+    extra_styling: str | None = Form(None),               # optional
     db: Session = Depends(get_db),
 ):
     if photo.content_type not in settings.ALLOWED_UPLOAD_CONTENT_TYPES:
@@ -46,7 +33,7 @@ async def create_restyle_batch(
     if len(photo_bytes) > settings.MAX_UPLOAD_SIZE_BYTES:
         raise HTTPException(
             status_code=413,
-            detail=f"File too large. Max {settings.MAX_UPLOAD_SIZE_BYTES // (1024*1024)} MB.",
+            detail=f"File too large. Max {settings.MAX_UPLOAD_SIZE_BYTES // (1024 * 1024)} MB.",
         )
     if len(photo_bytes) == 0:
         raise HTTPException(status_code=400, detail="Uploaded file is empty.")
@@ -84,21 +71,3 @@ def get_batch(batch_id: str, db: Session = Depends(get_db)):
     if not jobs:
         raise HTTPException(status_code=404, detail="Batch not found")
     return jobs
-
-
-@router.post("/select", response_model=JobOut, status_code=201)
-def select_draft(req: SelectDraftRequest, db: Session = Depends(get_db)):
-    try:
-        return job_service.select_draft(db, req.draft_job_id)
-    except job_service.DraftNotFound as e:
-        raise HTTPException(status_code=404, detail=str(e))
-
-
-@router.post("/regenerate", response_model=JobOut, status_code=201)
-def regenerate_final(req: RegenerateFinalRequest, db: Session = Depends(get_db)):
-    try:
-        return job_service.regenerate_final(db, req.batch_id)
-    except job_service.DraftNotFound as e:
-        raise HTTPException(status_code=404, detail=str(e))
-    except job_service.RegenLimitExceeded as e:
-        raise HTTPException(status_code=429, detail=str(e))

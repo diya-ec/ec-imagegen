@@ -1,4 +1,11 @@
-"""Run the RQ worker locally (without Docker): python scripts/run_worker.py"""
+"""
+Local dev worker for Linux/macOS — NOT used by Docker (Dockerfile.worker
+invokes `rq worker` directly via the CLI). Use this only for running the
+worker outside Docker on Linux/macOS. For Windows, use run_worker_windows.py
+instead (SIGALRM-based timeouts don't exist on Windows).
+
+Run with: python scripts/run_worker_dev.py
+"""
 import logging
 import os
 import sys

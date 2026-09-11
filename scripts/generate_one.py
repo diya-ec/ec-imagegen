@@ -1,13 +1,14 @@
 """
-Fastest way to see real output: one direct call to DeepInfra, no DB, no
-Redis, no FastAPI. Just the provider + prompt builder.
+Fastest way to see real restyle output: one direct call to Replicate, no DB,
+no Redis, no FastAPI. Just the provider + prompt builder.
 
 Usage:
-    export DEEPINFRA_API_KEY=your-real-key
-    python scripts/generate_one.py "Paneer Tikka" --stage draft
-    python scripts/generate_one.py "Paneer Tikka" --stage final
+    export REPLICATE_API_TOKEN=your-real-token
+    python scripts/generate_one.py path/to/source_photo.jpg
+    python scripts/generate_one.py path/to/source_photo.jpg --extra-styling "rustic wooden table"
+    python scripts/generate_one.py path/to/source_photo.jpg --variation 1
 
-Saves the result to ./output_<stage>.png and prints the cost.
+Saves the result to ./output_restyle.jpg and prints the cost.
 """
 import argparse
 import asyncio
@@ -17,26 +18,32 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from app.core.config import get_settings  # noqa: E402
-from app.inference.deepinfra import get_provider  # noqa: E402
-from app.schemas import WizardAnswers  # noqa: E402
-from app.services.prompt_builder import build_prompt  # noqa: E402
+from app.inference.replicate_provider import get_restyle_provider  # noqa: E402
+from app.services.prompt_builder import build_restyle_prompt  # noqa: E402
 
 
-async def main(dish_name: str, stage: str):
+async def main(photo_path: str, extra_styling: str | None, variation: int):
     settings = get_settings()
-    if not settings.DEEPINFRA_API_KEY or settings.DEEPINFRA_API_KEY == "test-key":
-        print("ERROR: set a real DEEPINFRA_API_KEY env var first.")
+    if not settings.REPLICATE_API_TOKEN:
+        print("ERROR: set a real REPLICATE_API_TOKEN env var first.")
         sys.exit(1)
 
-    model = settings.DRAFT_MODEL if stage == "draft" else settings.FINAL_MODEL
-    prompt = build_prompt(WizardAnswers(dish_name=dish_name))
-    print(f"Model:  {model}")
+    with open(photo_path, "rb") as f:
+        input_image = f.read()
+
+    prompt = build_restyle_prompt(extra_styling, variation_index=variation)
+    print(f"Model:  {settings.RESTYLE_MODEL}")
     print(f"Prompt: {prompt}")
 
-    provider = get_provider(settings)
-    result = await provider.generate(prompt=prompt, model=model, size=settings.IMAGE_SIZE)
+    provider = get_restyle_provider(settings)
+    result = await provider.generate(
+        prompt=prompt,
+        model=settings.RESTYLE_MODEL,
+        size=settings.IMAGE_SIZE,
+        input_image=input_image,
+    )
 
-    out_path = f"output_{stage}.png"
+    out_path = "output_restyle.jpg"
     with open(out_path, "wb") as f:
         f.write(result.content)
 
@@ -46,7 +53,8 @@ async def main(dish_name: str, stage: str):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser()
-    parser.add_argument("dish_name")
-    parser.add_argument("--stage", choices=["draft", "final"], default="draft")
+    parser.add_argument("photo_path", help="Path to a source photo on disk")
+    parser.add_argument("--extra-styling", default=None)
+    parser.add_argument("--variation", type=int, default=0)
     args = parser.parse_args()
-    asyncio.run(main(args.dish_name, args.stage))
+    asyncio.run(main(args.photo_path, args.extra_styling, args.variation))
